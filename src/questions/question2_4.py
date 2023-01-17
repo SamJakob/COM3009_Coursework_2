@@ -19,7 +19,7 @@ class Question2_4(Question):
         # Cannot exceed length of plaintext.
         m2 = b"Howdy partner"
 
-        self.begin_step("Show transitive property of CRC32")
+        self.begin_step("Show (affine) transitive property of CRC32")
 
         # We note here that in practice, CRC32 is actually
         # 'affine', not linear. As you can see we can turn
@@ -27,10 +27,10 @@ class Question2_4(Question):
         # base constant for CRC32 and applying it to our
         # XOR operation.
 
-        xor_const = self.xor(self.crc32(self.xor(m, m2)), self.crc32(m), self.crc32(m2))
-        print(f'XOR constant: {xor_const.hex()}')
+        crc_const = self.xor(self.crc32(self.xor(m, m2)), self.crc32(m), self.crc32(m2))
+        print(f'XOR constant: {crc_const.hex()}')
 
-        crc_then_xor = self.xor(self.crc32(m), self.crc32(m2), xor_const).hex()
+        crc_then_xor = self.xor(self.crc32(m), self.crc32(m2), crc_const).hex()
         print(crc_then_xor)
 
         xor_then_crc = self.crc32(self.xor(m, m2)).hex()
@@ -40,7 +40,57 @@ class Question2_4(Question):
         print("Does CRC then XOR == XOR then CRC")
         print_bool(crc_then_xor == xor_then_crc)
 
-        self.begin_step("Replace plain text of packet without key (and without detection).")
+        self.begin_step("Modify a checksum")
+
+        X = b'attack at dawn'
+        LX = self.crc32(X)
+
+        Y = b'attack at noon'
+        LY = self.crc32(Y)
+
+        d = self.xor(X, Y)
+        Ld = self.xor(LX, LY)
+
+        print(f"  X: {X}")
+        print(f"+ Δ: {d}")
+        print(f"= X XOR Δ: {self.xor(X, d)}")
+        print(f"=       Y: {Y}")
+
+        print()
+
+        print(f"  L(X): {LX.hex()}")
+        print(f"+ L(Δ): {Ld.hex()}")
+        print(f"= L(X) XOR L(Δ): {self.xor(LX, Ld).hex()}")
+        print(f"=          L(Y): {LY.hex()}")
+
+        self.begin_step("Modify packet without key, without plain text (and without detection).")
+
+        # Fake key-stream. All we do is XOR by the keystream,
+        # so the exact value isn't relevant.
+        keystream = random.randbytes(64)
+
+        # Generate the cipher text 'organically', as it would
+        # be in WEP.
+        C = self.wep_encrypt(m, keystream)
+
+        # Compute some new delta and corresponding CRC.
+        # We first compute some arbitrary delta value, pad it
+        # to the same length and concatenate the CRC value.
+        # Again, recalling that CRC32 has
+        raw_delta = bytes([0b00000100])
+        m_d = raw_delta + bytes([0] * (len(C) - 4 - len(raw_delta)))
+        delta = m_d + self.xor(Question2_4.crc32(m_d), crc_const)
+
+        # C' = C (XOR) delta
+        # Then, we replace the packet (in this case, by just
+        # writing it back into the same variable, imagine if
+        # MitM was so simple...).
+        C = self.xor(C, delta)
+
+        # Now decrypt our packet
+        self.wep_decrypt(C, keystream)
+
+        self.begin_step("Modify packet to desired plain text without key (and without detection).")
 
         # Fake key-stream. All we do is XOR by the keystream,
         # so the exact value isn't relevant.
@@ -97,8 +147,9 @@ class Question2_4(Question):
         # Plain text is (n + 32)-bit M || L(M)
         p = x + Question2_4.crc32(x)
         c = Question2_4.xor(k, p)
+        print(f"Original plaintext: {x}")
         print(f"Computed CRC: {Question2_4.crc32(x).hex()}")
-        print(f"Encrypted plaintext: {c.hex()}")
+        print(f"Encrypted ciphertext: {c.hex()}")
         return c
 
     @staticmethod
