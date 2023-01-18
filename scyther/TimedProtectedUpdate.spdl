@@ -1,0 +1,156 @@
+option "--one-role-per-agent"; // disallow agents in multiple roles
+
+usertype String;
+const BeginMessage: String;
+const GenerateKeys: String;
+
+usertype SessionKey;
+
+// This macro defines the shared secret key between R and T.
+// Whilst not in the protocol to accurately reflect the modelling assumptions in Scyther
+// this cryptographic primitive (symmetric pre-shared key algorithm) is used to indicate
+// to Scyther that the hardware channel between R and T may be considered secure.
+macro protectedChannel = k(R, T);
+
+// This macro defines a signature, created by the TPM on some value.
+// In this case the established PKI within Scyther is used to model this as a public-secret
+// key cryptography. For the TPM's signature specifically, it's modelled as the private key
+// of the TPM, which means anyone who holds the public key of the TPM may verify it.
+macro signatureT = sk(T);
+
+// See above.
+macro signatureS = sk(S);
+
+// Modelling Assumptions
+// ---------------------
+
+// Signing has been modelled as encryption where a value has been encrypted with
+// the signer's private key (so anyone with the public key can verify that it was indeed
+// signed by the expected signer).
+
+//////////////////////////////////////////////////////////////////////////////
+
+// The aim of this protocol is that S sends a message, securely, to R without having
+// S having R's public key or some symmetric key. Instead, S knows the public key
+// of a TPM, T, found on the board R.
+//
+// Communications between R and T are private, inaccessible to a Dolev-Yao attacker,
+// but communications between S and R are public - accessible to some such attacker.
+protocol TimedProtectedUpdate(R, S, T) {
+
+	// The manufacturer of the laptop, R.
+	role S {
+		
+		// 1. S tells R that it wishes to send a message.
+		send_10(S, R, BeginMessage);
+
+		var trPk: Function;
+		var tE: Ticket;
+
+		// 4. R sends the signature to S.
+		recv_40(R, S, {trPk, tE}signatureT);
+
+		// m is generated at the server.
+		fresh m: Data;
+
+		// Signal Running for the final commit claim.
+		claim_SRR(S, Running, R, m);
+
+		// 5. S signs the update and encrypts it with the public key
+		// generated at the TPM.
+		send_50(S, R, {{m, tE}trPk}signatureS);
+		
+		// Claim agreement and synchronization.
+		claim_SNS(S, Nisynch);
+		claim_SNA(S, Niagree);
+
+	}
+
+	// The laptop, produced by a manufacturer, S.
+	role R {
+
+		// The public key and ticket received from T.
+		var trPk: Function;
+		var tE: Ticket;
+		
+		// 1. S tells R that it wishes to send a message.
+		recv_10(S, R, BeginMessage);
+
+		// 2. R demands T to generate a pair of public and secret keys,
+		// SK, PK for R.
+		send_20(R, T, {GenerateKeys, R, T}protectedChannel);
+
+		// 3. T generates the public and secret keys and a ticket, tE,
+		// stating how long they are valid for. It also sends a
+		// signature on these to S.
+		recv_30(T, R, {( trPk, tE, {trPk, tE}signatureT)}protectedChannel);
+
+		// 4. R sends the signature to S.
+		send_40(R, S, {trPk, tE}signatureT);
+
+		var m: Data;
+
+		// 5. S signs the update and encrypts it with the public key
+		// generated at the TPM.
+		recv_50(S, R, {{m, tE}trPk}signatureS);
+
+		// 6. Send the encrypted update to the TPM, using the protected
+		// channel.
+		send_60(R, T, {{m, tE}trPk}protectedChannel);
+
+		// 7. The TPM checks the ticket value (not modelled as this is not
+		// possible to show here), decrypts m and sends it to the receiver,
+		// over the protected channel.
+		recv_70(T, R, {m}protectedChannel);
+
+		// Claim agreement and synchronization.
+		claim_RNS(R, Nisynch);
+		claim_RNA(R, Niagree);
+		
+		// Verify that the other roles have committed the same values.
+		claim_RCS(R, Commit, S, m);
+		claim_RCT(R, Commit, T, m);
+
+	}
+
+	// The on-board TPM of the laptop, R.
+	role T {
+
+		// The public and private key-pair generated on-demand for R.
+		fresh trPk: Function;
+		secret trSk: Function;
+		inversekeys( trPk, trSk );
+
+		// The ticket indicating the expiry of the above.
+		fresh tE: Ticket;
+		
+		// 2. R demands T to generate a pair of public and secret keys,
+		// SK, PK for R.
+		recv_20(R, T, {GenerateKeys, R, T}protectedChannel);
+
+		// 3. T generates the public and secret keys and a ticket, tE,
+		// stating how long they are valid for. It also sends a
+		// signature on these to S.
+		send_30(T, R, {( trPk, tE, {trPk, tE}signatureT )}protectedChannel);
+
+		var m: Data;
+
+		// 6. Send the encrypted update to the TPM, using the protected
+		// channel.
+		recv_60(R, T, {{m, tE}trPk}protectedChannel);
+
+		// Signal Running for the final commit claim.
+		claim_TRR(T, Running, R, m);
+
+		// 7. The TPM checks the ticket value (not modelled as this is not
+		// possible to show here), decrypts m and sends it to the receiver,
+		// over the protected channel.
+		send_70(T, R, {m}protectedChannel);
+
+		// Claim agreement and synchronization.
+		claim_TNS(T, Nisynch);
+		claim_TNA(T, Niagree);
+		
+	}
+
+}
